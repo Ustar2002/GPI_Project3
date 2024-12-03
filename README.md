@@ -12,6 +12,7 @@ Develop Your Own Physics Engine
 - 총알, 화살, 불(화염 방사기), 가스, 수류탄 등 시뮬레이션 구현
 - 사람 움직임 구현
 - 충돌 시 반응 구현 (발 맞으면 발 사용 불가 등)
+- 총 발사 시 반동 구현
 
 
 # Announcement
