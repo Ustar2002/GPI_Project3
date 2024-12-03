@@ -32,12 +32,17 @@ Contribution.
 
 ## 구현 기능 예시 (하단 리스트로 제한하지는 않고 더 제안 가능)
 A. Reference Text Book: Game Engine Architecture & Real-time Collision Detection
-B. Collision Detection: GJK collision detection, SAT, OBB, Moving Objects, Concave
-Object, Bounding volume hierarchy, Convex Hull Algorithm, Optimization, …
+
+B. Collision Detection: GJK collision detection, SAT, OBB, Moving Objects, Concave Object, Bounding volume hierarchy, Convex Hull Algorithm, Optimization, …
+
 C. Rigid Body Dynamics
+
 D. Impulsive Collision Response (with Torque)
+
 E. Particle System & Simulation: fluid, smoke, fire, explosion,…
-F. Numerical Methods: modified Euler method, RK4, Verlet Integration, Velocity
-Verlet, …
+
+F. Numerical Methods: modified Euler method, RK4, Verlet Integration, Velocity Verlet, …
+
 G. Model Deformation (Free-form Deformation)
+
 H. Deformable Body
