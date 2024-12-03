@@ -1,5 +1,20 @@
 # GPI_Project3
-Develop Your Own Game Engine
+Develop Your Own Physics Engine
+
+## About Project
+
+### Human Physics in pygame
+- 경희대학교 컴퓨터공학과 게임프로그래밍입문 강의의 3번째 프로젝트
+- 개발 기간: 2024.12.02 ~ 2024.12.14
+
+게임 물리 엔진을 구현하기 위해 수업 시간에 배운 여러 내용을 적용해보았다. 구현하고자 한 기술과 실제로 구현한 기능은 다음과 같다.
+- 사람과 같이 복잡한 3D 오브젝트에 작은 물체(총알) 충돌 구현
+- 총알, 화살, 불(화염 방사기), 가스, 수류탄 등 시뮬레이션 구현
+- 사람 움직임 구현
+- 충돌 시 반응 구현 (발 맞으면 발 사용 불가 등)
+
+
+# Announcement
 
 ## 과제 설명
 Pygame framework를 기초로 나만의 게임 엔진을 제작해봅시다.
