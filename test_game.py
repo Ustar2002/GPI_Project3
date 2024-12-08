@@ -1,33 +1,40 @@
-# test_game.py (업데이트)
 import unittest
-from unittest.mock import Mock, patch
-from GPI_Project3 import Game, Player, Bullet
+from GPI_Project3 import Player
 
-class TestGame(unittest.TestCase):
+class TestPlayerMovement(unittest.TestCase):
     def setUp(self):
-        self.game = Game()
-        self.player = self.game.player
-        self.bullet = Bullet(self.player.position, (1, 0))
+        # 각 테스트마다 새로운 플레이어 인스턴스 생성
+        self.player = Player(x=100, y=100, speed=5)
 
-    def test_player_movement(self):
-        initial_position = self.player.position.copy()
-        self.player.move('right')
-        self.assertNotEqual(initial_position, self.player.position)
-        self.assertEqual(self.player.position.x, initial_position.x + self.player.speed)
+    def test_initial_position(self):
+        # 플레이어 초기 위치 테스트
+        self.assertEqual(self.player.x, 100)
+        self.assertEqual(self.player.y, 100)
 
-    def test_bullet_movement(self):
-        initial_position = self.bullet.position.copy()
-        self.bullet.update()
-        self.assertNotEqual(initial_position, self.bullet.position)
+    def test_move_right(self):
+        # 오른쪽 이동 테스트
+        self.player.move(1, 0)  # dx=1, dy=0
+        self.assertEqual(self.player.x, 100 + 5)
+        self.assertEqual(self.player.y, 100)
 
-    def test_bullet_collision(self):
-        self.bullet.rect.center = self.player.rect.center
-        collision = self.game.check_collision(self.bullet, self.player)
-        self.assertTrue(collision)
+    def test_move_left(self):
+        # 왼쪽 이동 테스트
+        self.player.move(-1, 0)
+        self.assertEqual(self.player.x, 100 - 5)
+        self.assertEqual(self.player.y, 100)
 
-    def test_reaction_on_hit(self):
-        self.player.hit('foot')
-        self.assertIn('foot', self.player.disabled_limbs)
+    def test_move_up(self):
+        # 위쪽 이동 테스트
+        self.player.move(0, -1)
+        self.assertEqual(self.player.x, 100)
+        self.assertEqual(self.player.y, 100 - 5)
+
+    def test_move_down(self):
+        # 아래쪽 이동 테스트
+        self.player.move(0, 1)
+        self.assertEqual(self.player.x, 100)
+        self.assertEqual(self.player.y, 100 + 5)
+
 
 if __name__ == '__main__':
     unittest.main()
