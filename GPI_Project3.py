@@ -1,117 +1,83 @@
-# game.py
 import pygame
 import sys
-import math
 
-pygame.init()
-
-# 화면 설정
-WIDTH, HEIGHT = 800, 600
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("GPI_Project3_2022105744")
-clock = pygame.time.Clock()
-
-# 색상 정의
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-
-# 플레이어 클래스
 class Player:
-    def __init__(self):
-        self.position = pygame.math.Vector2(WIDTH//2, HEIGHT//2)
-        self.speed = 5
-        self.image = pygame.Surface((50, 100))
-        self.image.fill(WHITE)
-        self.rect = self.image.get_rect(center=self.position)
-        self.alive = True
-        self.disabled_limbs = []
+    def __init__(self, x=0, y=0, speed=5):
+        """
+        Player 클래스
+        x, y: 플레이어의 초기 위치
+        speed: 플레이어 이동 속도
+        """
+        self.x = x
+        self.y = y
+        self.speed = speed
+        # 플레이어의 크기 및 모양 정의(여기서는 임시 Rect)
+        self.width = 50
+        self.height = 50
+        self.color = (255, 255, 255)
+        self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
 
-    def move(self, direction):
-        if direction == 'left':
-            self.position.x -= self.speed
-        elif direction == 'right':
-            self.position.x += self.speed
-        elif direction == 'up':
-            self.position.y -= self.speed
-        elif direction == 'down':
-            self.position.y += self.speed
-        self.rect.center = self.position
-
-    def hit(self, limb):
-        self.disabled_limbs.append(limb)
-        return f"{limb.capitalize()} disabled"
-
-    def draw(self, surface):
-        surface.blit(self.image, self.rect)
-
-# 총알 클래스
-class Bullet:
-    def __init__(self, position, direction):
-        self.position = pygame.math.Vector2(position)
-        self.direction = pygame.math.Vector2(direction).normalize()
-        self.speed = 10
-        self.image = pygame.Surface((10, 10))
-        self.image.fill(BLACK)
-        self.rect = self.image.get_rect(center=self.position)
+    def move(self, dx, dy):
+        """
+        플레이어의 위치를 변경한다.
+        dx, dy: 이동할 방향 및 거리
+        """
+        self.x += dx * self.speed
+        self.y += dy * self.speed
+        self.rect.x = self.x
+        self.rect.y = self.y
 
     def update(self):
-        self.position += self.direction * self.speed
-        self.rect.center = self.position
+        """
+        플레이어 상태 업데이트 (간단한 예: 아직 충돌 검사나 중력 없음)
+        """
+        pass
 
-    def draw(self, surface):
-        surface.blit(self.image, self.rect)
+    def draw(self, screen):
+        """
+        플레이어를 화면에 그린다.
+        """
+        pygame.draw.rect(screen, self.color, self.rect)
 
-# 게임 클래스
-class Game:
-    def __init__(self):
-        self.player = Player()
-        self.bullets = []
 
-    def check_collision(self, bullet, player):
-        return bullet.rect.colliderect(player.rect)
+def run_simulation():
+    pygame.init()
+    screen_width, screen_height = 800, 600
+    screen = pygame.display.set_mode((screen_width, screen_height))
+    pygame.display.set_caption("GPI Project 3 Simulation")
 
-    def run(self):
-        running = True
-        while running:
-            screen.fill(WHITE)
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
+    clock = pygame.time.Clock()
+    player = Player(x=screen_width//2, y=screen_height//2, speed=5)
 
-                # 총알 발사
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_SPACE:
-                        mouse_pos = pygame.mouse.get_pos()
-                        direction = pygame.math.Vector2(mouse_pos) - self.player.position
-                        bullet = Bullet(self.player.position, direction)
-                        self.bullets.append(bullet)
+    running = True
+    while running:
+        clock.tick(60)  # FPS 60
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+                break
 
-            # 플레이어 움직임
-            keys = pygame.key.get_pressed()
-            if keys[pygame.K_a]:
-                self.player.move('left')
-            if keys[pygame.K_d]:
-                self.player.move('right')
-            if keys[pygame.K_w]:
-                self.player.move('up')
-            if keys[pygame.K_s]:
-                self.player.move('down')
+        keys = pygame.key.get_pressed()
+        dx, dy = 0, 0
+        if keys[pygame.K_LEFT]:
+            dx = -1
+        if keys[pygame.K_RIGHT]:
+            dx = 1
+        if keys[pygame.K_UP]:
+            dy = -1
+        if keys[pygame.K_DOWN]:
+            dy = 1
 
-            # 총알 업데이트 및 충돌 체크
-            for bullet in self.bullets[:]:
-                bullet.update()
-                bullet.draw(screen)
-                if self.check_collision(bullet, self.player):
-                    self.player.hit('foot')
-                    self.bullets.remove(bullet)
+        player.move(dx, dy)
+        player.update()
 
-            self.player.draw(screen)
-            pygame.display.flip()
-            clock.tick(60)
+        screen.fill((0, 0, 0))
+        player.draw(screen)
+        pygame.display.flip()
 
-        pygame.quit()
-        sys.exit()
+    pygame.quit()
+    sys.exit()
 
-if __name__ == '__main__':
-    game = Game()
-    game.run()
+
+if __name__ == "__main__":
+    run_simulation()
