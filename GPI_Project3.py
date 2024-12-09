@@ -10,6 +10,7 @@ pygame.display.set_caption("Physics Demo")
 
 clock = pygame.time.Clock()
 FONT = pygame.font.SysFont(None, 24)
+BIG_FONT = pygame.font.SysFont(None, 30, bold=True)
 
 floor_y = HEIGHT - 50
 gravity = 0.3
@@ -35,6 +36,10 @@ direction_names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 wind_direction_index = 0
 wind_strength = 0
 wind_enabled = False
+
+# 무기 모드: 0 - 총, 1 - 수류탄, 2 - 화살
+weapon_mode = 0
+weapon_names = ["Gun", "Grenade", "Arrow"]
 
 class PlayerSpawnPoint:
     def __init__(self, x, y):
@@ -73,7 +78,6 @@ class Projectile:
         self.size = 5
 
     def update(self):
-        # 직선 운동, 중력X
         self.x += self.vx
         self.y += self.vy
         self.vx *= 0.999
@@ -88,8 +92,61 @@ class Projectile:
     def hit_floor(self):
         return self.y >= floor_y
 
+class Arrow:
+    def __init__(self, x, y, vx, vy):
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.stuck = False
+        self.angle = math.atan2(self.vy, self.vx)
+        self.size = 10
+
+    def update(self, wind_enabled, wind_direction_index, wind_strength, bus):
+        if self.stuck:
+            return
+        # 중력
+        self.vy += gravity
+        # 바람
+        if wind_enabled and wind_strength > 0:
+            wx, wy = wind_directions[wind_direction_index]
+            self.vx += wx * wind_strength * 0.1
+            self.vy += wy * wind_strength * 0.1
+
+        self.x += self.vx
+        self.y += self.vy
+        self.angle = math.atan2(self.vy, self.vx)
+
+        if (self.x < -50 or self.x > WIDTH+50 or self.y < -50 or self.y > HEIGHT+100):
+            self.stuck = True
+            return
+
+        if self.y > floor_y:
+            diff = self.y - floor_y
+            self.y -= diff
+            self.vx = 0
+            self.vy = 0
+            self.stuck = True
+            return
+
+        bx1,by1,bx2,by2 = bus.aabb()
+        if self.x > bx1 and self.x < bx2 and self.y > by1 and self.y < by2:
+            self.vx = 0
+            self.vy = 0
+            self.stuck = True
+            ix = math.cos(self.angle)*5
+            iy = math.sin(self.angle)*5
+            bus.apply_impulse(ix, iy, self.x, self.y)
+
+    def draw(self, surface):
+        arrow_length = 20
+        cosA = math.cos(self.angle)
+        sinA = math.sin(self.angle)
+        x_end = self.x - cosA*arrow_length
+        y_end = self.y - sinA*arrow_length
+        pygame.draw.line(surface, (139,69,19), (int(self.x), int(self.y)), (int(x_end), int(y_end)), 3)
+
 class Fragment:
-    # 수류탄 폭발 파편
     def __init__(self, x, y):
         self.x = x
         self.y = y
@@ -113,11 +170,8 @@ class Fragment:
         return self.life <= 0 or self.x < 0 or self.x>WIDTH or self.y<0 or self.y>HEIGHT
 
     def check_bus_collision(self, bus):
-        # 파편은 점으로 간주, bus AABB와 충돌 시 파편 제거 & 버스에 임펄스
         bx1,by1,bx2,by2 = bus.aabb()
         if self.x > bx1 and self.x < bx2 and self.y > by1 and self.y < by2:
-            # 충돌
-            # 버스에 약간의 임펄스 적용
             ix = self.vx * 0.5
             iy = self.vy * 0.5
             bus.apply_impulse(ix, iy, self.x, self.y)
@@ -144,39 +198,27 @@ class Grenade:
         self.vx *= 0.99
         self.vy *= 0.99
 
-        # 바닥 충돌
         if self.y + self.size > floor_y:
             diff = (self.y + self.size) - floor_y
             self.y -= diff
             self.vy = -self.vy * 0.6
             self.vx *= 0.8
 
-        # Bus 충돌 처리 (AABB)
         bx1,by1,bx2,by2 = bus.aabb()
-        # 수류탄은 작은 원이라도 점 비슷하게 처리
         if self.x > bx1 and self.x < bx2 and self.y > by1 and self.y < by2:
-            # 버스 내부 침투 → 반사 처리
-            # 간단히 x방향 반사나 y방향 반사
-            # 충돌면을 단순화하기 위해 현재 위치에서 버스 중심을 이용해 반사
             bus_cx = (bx1+bx2)/2
             bus_cy = (by1+by2)/2
             dx = self.x - bus_cx
             dy = self.y - bus_cy
-            # 버스 중심 방향 벡터 반사
-            # 정규화
             dist = math.sqrt(dx*dx+dy*dy)
             if dist != 0:
                 nx = dx/dist
                 ny = dy/dist
-                # 속도 벡터를 이 방향으로 반사
                 dot = self.vx*nx + self.vy*ny
-                # 반사 벡터
                 self.vx = self.vx - 2*dot*nx
                 self.vy = self.vy - 2*dot*ny
-                # 약간 밀어냄
                 self.x += nx * 5
                 self.y += ny * 5
-                # 버스에 임펄스
                 bus.apply_impulse(self.vx*0.5, self.vy*0.5, self.x, self.y)
 
         self.time_alive += dt
@@ -318,13 +360,15 @@ class RigidBodyObject:
         return (px >= x1 and px <= x2 and py >= y1 and py <= y2)
 
 def reset_game():
-    global player_spawn, projectiles, bus, particles, fragments, grenades, wind_enabled, wind_direction_index, wind_strength, water_level, time_since_rain, rain_enabled
+    global player_spawn, projectiles, bus, particles, fragments, grenades, arrows, weapon_mode
     player_spawn = PlayerSpawnPoint(WIDTH//2, HEIGHT//2)
     projectiles = []
     bus = RigidBodyObject(WIDTH//2, HEIGHT//2, 50, 30, mass=20)
     particles = []
     fragments = []
     grenades = []
+    arrows = []
+    global wind_enabled, wind_direction_index, wind_strength, water_level, time_since_rain, rain_enabled
     wind_enabled = False
     wind_direction_index = 0
     wind_strength = 0
@@ -333,9 +377,9 @@ def reset_game():
     rain_enabled = False
     screen.fill((30,30,30))
     pygame.display.flip()
-    return player_spawn, projectiles, bus, particles, fragments, grenades
+    return player_spawn, projectiles, bus, particles, fragments, grenades, arrows
 
-player_spawn, projectiles, bus, particles, fragments, grenades = reset_game()
+player_spawn, projectiles, bus, particles, fragments, grenades, arrows = reset_game()
 
 running = True
 
@@ -343,42 +387,54 @@ while running:
     dt = clock.tick(60)/1000.0
     time_since_rain += dt
     keys = pygame.key.get_pressed()
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_r:
-                player_spawn, projectiles, bus, particles, fragments, grenades = reset_game()
-            if event.key == pygame.K_w:
+                player_spawn, projectiles, bus, particles, fragments, grenades, arrows = reset_game()
+            if event.key == pygame.K_e:  # E키로 WindToggle
                 wind_enabled = not wind_enabled
             if event.key in [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
                              pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8]:
-                wind_direction_index = int(event.key) - pygame.K_1
+                wind_direction_index = event.key - pygame.K_1
             if event.key == pygame.K_9:
                 wind_strength += 1
             elif event.key == pygame.K_0:
                 wind_strength = max(0, wind_strength - 1)
+            if event.key == pygame.K_q:
+                weapon_mode = (weapon_mode + 1) % 3
+
         elif event.type == pygame.MOUSEBUTTONDOWN:
             # 우클릭 비 토글
             if event.button == 3:
                 rain_enabled = not rain_enabled
                 if rain_enabled:
                     time_since_rain = 0.0
-            # 좌클릭 탄환
+            # 좌클릭 발사
             if event.button == 1:
-                mx, my = pygame.mouse.get_pos()
-                projectiles.append(Projectile(player_spawn.x, player_spawn.y, mx, my))
-            # 가운데 클릭 수류탄
-            if event.button == 2:
                 mx, my = pygame.mouse.get_pos()
                 dx = mx - player_spawn.x
                 dy = my - player_spawn.y
                 dist = math.sqrt(dx*dx+dy*dy)
-                if dist == 0: dist=1
-                speed = 8
-                vx = (dx/dist)*speed
-                vy = (dy/dist)*speed
-                grenades.append(Grenade(player_spawn.x, player_spawn.y, vx, vy, fuse=3.0))
+                if dist == 0:
+                    dist = 1
+                if weapon_mode == 0:
+                    # 총
+                    projectiles.append(Projectile(player_spawn.x, player_spawn.y, mx, my))
+                elif weapon_mode == 1:
+                    # 수류탄
+                    speed = 8
+                    vx = (dx/dist)*speed
+                    vy = (dy/dist)*speed
+                    grenades.append(Grenade(player_spawn.x, player_spawn.y, vx, vy, fuse=3.0))
+                elif weapon_mode == 2:
+                    # 화살
+                    speed = 15
+                    vx = (dx/dist)*speed
+                    vy = (dy/dist)*speed
+                    arrows.append(Arrow(player_spawn.x, player_spawn.y, vx, vy))
 
     player_spawn.handle_input(keys)
 
@@ -438,6 +494,9 @@ while running:
         for f in fragments:
             f.vx += force_x*0.05
             f.vy += force_y*0.05
+        for arr in arrows:
+            arr.vx += force_x*0.05
+            arr.vy += force_y*0.05
 
     # 물 증발
     if not rain_enabled and time_since_rain > RAIN_DECAY_TIME:
@@ -462,11 +521,14 @@ while running:
         f.update()
         if not f.is_dead():
             if f.check_bus_collision(bus):
-                # 버스와 충돌 -> 파편 소멸
                 pass
             else:
                 survived_frags.append(f)
     fragments = survived_frags
+
+    # 화살 업데이트
+    for arr in arrows:
+        arr.update(wind_enabled, wind_direction_index, wind_strength, bus)
 
     # 렌더링
     screen.fill((30, 30, 30))
@@ -477,7 +539,6 @@ while running:
     for pa in particles:
         pa.draw(screen)
 
-    # 물 웅덩이
     pygame.draw.line(screen, (100,50,0), (0, floor_y), (WIDTH, floor_y), 5)
     if water_level > 0:
         water_height = min(20, water_level*0.5)
@@ -486,18 +547,34 @@ while running:
         surf.fill((0,0,255, alpha))
         screen.blit(surf, (0, floor_y - water_height))
 
-    # 수류탄, 파편 그리기
     for g in grenades:
         g.draw(screen)
     for f in fragments:
         f.draw(screen)
+    for arr in arrows:
+        arr.draw(screen)
+
+    # UI 패널
+    ui_surf = pygame.Surface((WIDTH, 80), pygame.SRCALPHA)
+    ui_surf.fill((0,0,0,180)) # 반투명 검정 배경
+    screen.blit(ui_surf, (0,0))
+
+    current_weapon_name = weapon_names[weapon_mode]
+
+    weapon_text = BIG_FONT.render(f"Current Weapon: {current_weapon_name}", True, (255,255,255))
+    screen.blit(weapon_text, (10, 5))
 
     direction_text = direction_names[wind_direction_index]
-    info_text = FONT.render(
-        "[Arrows/WASD]Move | L:Bullet | R:RainToggle | M:Grenade(Mid Click) | W:WindToggle | 1~8:Dir={} | 9/0:WStr={} | R:Reset | water={:.2f}".format(
-            direction_text, wind_strength, water_level),
-        True, (255,255,255))
-    screen.blit(info_text, (10, 10))
+
+    # 2줄로 정보 표시
+    info_str_line1 = "[Q]:SwitchWeapon | [LClick]:Fire | [RClick]:Toggle Rain | [E]:WindToggle | [R]:Reset"
+    info_str_line2 = f"[1~8]:WindDir={direction_text} | [9/0]:WindStr={wind_strength} | water={water_level:.2f}"
+
+    info_text_line1 = FONT.render(info_str_line1, True, (255,255,255))
+    info_text_line2 = FONT.render(info_str_line2, True, (255,255,255))
+
+    screen.blit(info_text_line1, (10, 35))
+    screen.blit(info_text_line2, (10, 55))
 
     pygame.display.flip()
 
