@@ -14,13 +14,27 @@ FONT = pygame.font.SysFont(None, 24)
 floor_y = HEIGHT - 50
 gravity = 0.3
 
-# 바닥 물 상태
-water_level = 0.0         # 고인 물의 양
-time_since_rain = 0.0     # 비가 안 온 시간(증발용)
-RAIN_DECAY_TIME = 5.0     # 비 안 올 경우 5초 후부터 천천히 증발 시작
-EVAPORATION_RATE = 0.01   # 증발 속도(프레임당)
-
+# 비, 바람 관련 전역변수
+water_level = 0.0
+time_since_rain = 0.0
+RAIN_DECAY_TIME = 5.0
+EVAPORATION_RATE = 0.01
 rain_enabled = False
+
+wind_directions = [
+    (0, -1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1)
+]
+direction_names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+wind_direction_index = 0
+wind_strength = 0
+wind_enabled = False
 
 class PlayerSpawnPoint:
     def __init__(self, x, y):
@@ -59,7 +73,7 @@ class Projectile:
         self.size = 5
 
     def update(self):
-        # 중력 미적용, 직진
+        # 직선 운동, 중력X
         self.x += self.vx
         self.y += self.vy
         self.vx *= 0.999
@@ -74,109 +88,121 @@ class Projectile:
     def hit_floor(self):
         return self.y >= floor_y
 
-class RigidBodyObject:
-    def __init__(self, x, y, width, height, mass=20):
+class Fragment:
+    # 수류탄 폭발 파편
+    def __init__(self, x, y):
         self.x = x
         self.y = y
-        self.width = width
-        self.height = height
-        self.mass = mass
-        self.vx = 0
-        self.vy = 0
-        self.angle = 0
-        self.angular_velocity = 0
-        self.I = (1.0/12.0)*self.mass*(self.width**2 + self.height**2)
-
-    def get_points(self):
-        hw = self.width/2
-        hh = self.height/2
-        cosA = math.cos(self.angle)
-        sinA = math.sin(self.angle)
-        points = [
-            (self.x + (-hw*cosA + hh*sinA), self.y + (-hw*sinA - hh*cosA)),  # top-left
-            (self.x + ( hw*cosA + hh*sinA), self.y + ( hw*sinA - hh*cosA)),  # top-right
-            (self.x + ( hw*cosA - hh*sinA), self.y + ( hw*sinA + hh*cosA)),  # bottom-right
-            (self.x + (-hw*cosA - hh*sinA), self.y + (-hw*sinA + hh*cosA))   # bottom-left
-        ]
-        return points
-
-    def apply_impulse(self, ix, iy, px=None, py=None):
-        if px is None or py is None:
-            self.vx += ix / self.mass
-            self.vy += iy / self.mass
-        else:
-            rx = px - self.x
-            ry = py - self.y
-            self.vx += ix / self.mass
-            self.vy += iy / self.mass
-            torque = rx * iy - ry * ix
-            self.angular_velocity += torque / self.I
+        angle = random.uniform(0, math.pi*2)
+        speed = random.uniform(5,12)
+        self.vx = math.cos(angle)*speed
+        self.vy = math.sin(angle)*speed
+        self.life = 60
 
     def update(self):
-        global water_level
+        self.vx *= 0.99
+        self.vy *= 0.99
+        self.x += self.vx
+        self.y += self.vy
+        self.life -= 1
 
+    def draw(self, surface):
+        pygame.draw.circle(surface, (255,255,0), (int(self.x), int(self.y)), 3)
+
+    def is_dead(self):
+        return self.life <= 0 or self.x < 0 or self.x>WIDTH or self.y<0 or self.y>HEIGHT
+
+    def check_bus_collision(self, bus):
+        # 파편은 점으로 간주, bus AABB와 충돌 시 파편 제거 & 버스에 임펄스
+        bx1,by1,bx2,by2 = bus.aabb()
+        if self.x > bx1 and self.x < bx2 and self.y > by1 and self.y < by2:
+            # 충돌
+            # 버스에 약간의 임펄스 적용
+            ix = self.vx * 0.5
+            iy = self.vy * 0.5
+            bus.apply_impulse(ix, iy, self.x, self.y)
+            return True
+        return False
+
+class Grenade:
+    def __init__(self, x, y, vx, vy, fuse=3.0):
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.size = 7
+        self.fuse = fuse
+        self.time_alive = 0.0
+        self.exploded = False
+
+    def update(self, dt, bus):
+        if self.exploded:
+            return
         self.vy += gravity
         self.x += self.vx
         self.y += self.vy
-        self.angle += self.angular_velocity
-
-        # 공기저항
         self.vx *= 0.99
         self.vy *= 0.99
-        self.angular_velocity *= 0.99
 
-        # 회전 및 바닥 처리
-        points = self.get_points()
-        max_y = max(p[1] for p in points)
-        if max_y > floor_y:
-            diff = max_y - floor_y
+        # 바닥 충돌
+        if self.y + self.size > floor_y:
+            diff = (self.y + self.size) - floor_y
             self.y -= diff
-            self.vy = 0
-            # 바닥 마찰: 물이 많을수록 마찰 감소
-            # dry friction: vx *= 0.95, wet: vx *= closer to 1.0
-            # water_level 높을수록 감쇠율 감소
-            friction_factor = 0.95 + 0.05*(1/(1+water_level)) # 물 많을수록 조금씩 1에 가까워짐
-            # 반대로 1/(1+water_level)는 물 많을수록 작아짐, 0.95+0.05*(작은값) ~0.95초반
-            # 여기서는 water_level 높을수록 마찰 줄이기 위해 역관계로 조정
-            # 더 단순히: 감쇠율 = 0.95 - min(0.4, water_level*0.01) 이런식으로 해도 됨
-            # 여기서는 예시로:
-            # water_level이 0이면 감쇠율=0.95
-            # water_level이 커지면 감쇠율 약간 커짐 -> 덜 감쇠(더 미끄러짐)
-            # 여기서는 단순히 감쇠율을 줄이자:
-            base_friction = 0.95
-            # water_level이 0일때 0.95, water_level이 100일때 0.55 등
-            friction = max(0.55, base_friction - water_level*0.004)
-            self.vx *= friction
-            self.angular_velocity *= friction
+            self.vy = -self.vy * 0.6
+            self.vx *= 0.8
 
-            if abs(self.angular_velocity) < 0.05:
-                self.angular_velocity = 0
-            else:
-                self.angular_velocity *= 0.9
+        # Bus 충돌 처리 (AABB)
+        bx1,by1,bx2,by2 = bus.aabb()
+        # 수류탄은 작은 원이라도 점 비슷하게 처리
+        if self.x > bx1 and self.x < bx2 and self.y > by1 and self.y < by2:
+            # 버스 내부 침투 → 반사 처리
+            # 간단히 x방향 반사나 y방향 반사
+            # 충돌면을 단순화하기 위해 현재 위치에서 버스 중심을 이용해 반사
+            bus_cx = (bx1+bx2)/2
+            bus_cy = (by1+by2)/2
+            dx = self.x - bus_cx
+            dy = self.y - bus_cy
+            # 버스 중심 방향 벡터 반사
+            # 정규화
+            dist = math.sqrt(dx*dx+dy*dy)
+            if dist != 0:
+                nx = dx/dist
+                ny = dy/dist
+                # 속도 벡터를 이 방향으로 반사
+                dot = self.vx*nx + self.vy*ny
+                # 반사 벡터
+                self.vx = self.vx - 2*dot*nx
+                self.vy = self.vy - 2*dot*ny
+                # 약간 밀어냄
+                self.x += nx * 5
+                self.y += ny * 5
+                # 버스에 임펄스
+                bus.apply_impulse(self.vx*0.5, self.vy*0.5, self.x, self.y)
 
-        # 화면 밖 이탈 방지
-        half_diag = max(self.width, self.height)
-        self.x = max(half_diag/2, min(self.x, WIDTH - half_diag/2))
-        self.y = min(self.y, HEIGHT - half_diag/2)
+        self.time_alive += dt
+        if self.time_alive >= self.fuse and not self.exploded:
+            self.explode()
+
+    def explode(self):
+        self.exploded = True
 
     def draw(self, surface):
-        rect_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
-        rect_surf.fill((0,0,255))
-        rotated = pygame.transform.rotate(rect_surf, -math.degrees(self.angle))
-        w, h = rotated.get_size()
-        blit_x = int(self.x - w/2)
-        blit_y = int(self.y - h/2)
-        surface.blit(rotated, (blit_x, blit_y))
+        if self.exploded:
+            return
+        pygame.draw.circle(surface, (100,100,100), (int(self.x), int(self.y)), self.size)
 
-    def aabb(self):
-        points = self.get_points()
-        xs = [p[0] for p in points]
-        ys = [p[1] for p in points]
-        return min(xs), min(ys), max(xs), max(ys)
+    def is_exploded(self):
+        return self.exploded
 
-    def inside_aabb(self, px, py):
-        x1,y1,x2,y2 = self.aabb()
-        return (px >= x1 and px <= x2 and py >= y1 and py <= y2)
+    def get_position(self):
+        return (self.x, self.y)
+
+def spawn_fragments(x, y):
+    frags = []
+    count = random.randint(10,20)
+    for i in range(count):
+        frags.append(Fragment(x, y))
+    return frags
 
 class Particle:
     def __init__(self, x, y, vx, vy, size=3, life=120):
@@ -204,27 +230,101 @@ class Particle:
     def draw(self, surface):
         pygame.draw.circle(surface, (0,0,255), (int(self.x), int(self.y)), self.size)
 
-wind_directions = [
-    (0, -1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-    (0, 1),
-    (-1, 1),
-    (-1, 0),
-    (-1, -1)
-]
-direction_names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-wind_direction_index = 0
-wind_strength = 0
-wind_enabled = False
+class RigidBodyObject:
+    def __init__(self, x, y, width, height, mass=20):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.mass = mass
+        self.vx = 0
+        self.vy = 0
+        self.angle = 0
+        self.angular_velocity = 0
+        self.I = (1.0/12.0)*self.mass*(self.width**2 + self.height**2)
+
+    def get_points(self):
+        hw = self.width/2
+        hh = self.height/2
+        cosA = math.cos(self.angle)
+        sinA = math.sin(self.angle)
+        points = [
+            (self.x + (-hw*cosA + hh*sinA), self.y + (-hw*sinA - hh*cosA)),
+            (self.x + ( hw*cosA + hh*sinA), self.y + ( hw*sinA - hh*cosA)),
+            (self.x + ( hw*cosA - hh*sinA), self.y + ( hw*sinA + hh*cosA)),
+            (self.x + (-hw*cosA - hh*sinA), self.y + (-hw*sinA + hh*cosA))
+        ]
+        return points
+
+    def apply_impulse(self, ix, iy, px=None, py=None):
+        if px is None or py is None:
+            self.vx += ix / self.mass
+            self.vy += iy / self.mass
+        else:
+            rx = px - self.x
+            ry = py - self.y
+            self.vx += ix / self.mass
+            self.vy += iy / self.mass
+            torque = rx * iy - ry * ix
+            self.angular_velocity += torque / self.I
+
+    def update(self):
+        global water_level
+        self.vy += gravity
+        self.x += self.vx
+        self.y += self.vy
+        self.angle += self.angular_velocity
+
+        self.vx *= 0.99
+        self.vy *= 0.99
+        self.angular_velocity *= 0.99
+
+        points = self.get_points()
+        max_y = max(p[1] for p in points)
+        if max_y > floor_y:
+            diff = max_y - floor_y
+            self.y -= diff
+            self.vy = 0
+            friction = max(0.55, 0.95 - water_level*0.004)
+            self.vx *= friction
+            self.angular_velocity *= friction
+
+            if abs(self.angular_velocity) < 0.05:
+                self.angular_velocity = 0
+            else:
+                self.angular_velocity *= 0.9
+
+        half_diag = max(self.width, self.height)
+        self.x = max(half_diag/2, min(self.x, WIDTH - half_diag/2))
+        self.y = min(self.y, HEIGHT - half_diag/2)
+
+    def draw(self, surface):
+        rect_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        rect_surf.fill((0,0,255))
+        rotated = pygame.transform.rotate(rect_surf, -math.degrees(self.angle))
+        w, h = rotated.get_size()
+        blit_x = int(self.x - w/2)
+        blit_y = int(self.y - h/2)
+        surface.blit(rotated, (blit_x, blit_y))
+
+    def aabb(self):
+        points = self.get_points()
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def inside_aabb(self, px, py):
+        x1,y1,x2,y2 = self.aabb()
+        return (px >= x1 and px <= x2 and py >= y1 and py <= y2)
 
 def reset_game():
-    global player_spawn, projectiles, bus, particles, wind_enabled, wind_direction_index, wind_strength, water_level, time_since_rain, rain_enabled
+    global player_spawn, projectiles, bus, particles, fragments, grenades, wind_enabled, wind_direction_index, wind_strength, water_level, time_since_rain, rain_enabled
     player_spawn = PlayerSpawnPoint(WIDTH//2, HEIGHT//2)
     projectiles = []
     bus = RigidBodyObject(WIDTH//2, HEIGHT//2, 50, 30, mass=20)
     particles = []
+    fragments = []
+    grenades = []
     wind_enabled = False
     wind_direction_index = 0
     wind_strength = 0
@@ -233,72 +333,61 @@ def reset_game():
     rain_enabled = False
     screen.fill((30,30,30))
     pygame.display.flip()
-    return player_spawn, projectiles, bus, particles
+    return player_spawn, projectiles, bus, particles, fragments, grenades
 
-player_spawn, projectiles, bus, particles = reset_game()
+player_spawn, projectiles, bus, particles, fragments, grenades = reset_game()
 
 running = True
-last_time = pygame.time.get_ticks()
 
 while running:
     dt = clock.tick(60)/1000.0
-    # dt: delta time(초 단위)
-    # time_since_rain으로 증발 처리에 활용
     time_since_rain += dt
-
     keys = pygame.key.get_pressed()
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_r:
-                player_spawn, projectiles, bus, particles = reset_game()
+                player_spawn, projectiles, bus, particles, fragments, grenades = reset_game()
             if event.key == pygame.K_w:
                 wind_enabled = not wind_enabled
-            if event.key == pygame.K_1:
-                wind_direction_index = 0
-            elif event.key == pygame.K_2:
-                wind_direction_index = 1
-            elif event.key == pygame.K_3:
-                wind_direction_index = 2
-            elif event.key == pygame.K_4:
-                wind_direction_index = 3
-            elif event.key == pygame.K_5:
-                wind_direction_index = 4
-            elif event.key == pygame.K_6:
-                wind_direction_index = 5
-            elif event.key == pygame.K_7:
-                wind_direction_index = 6
-            elif event.key == pygame.K_8:
-                wind_direction_index = 7
+            if event.key in [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
+                             pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8]:
+                wind_direction_index = int(event.key) - pygame.K_1
             if event.key == pygame.K_9:
                 wind_strength += 1
             elif event.key == pygame.K_0:
                 wind_strength = max(0, wind_strength - 1)
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            # 우클릭으로 비 토글
+            # 우클릭 비 토글
             if event.button == 3:
                 rain_enabled = not rain_enabled
                 if rain_enabled:
                     time_since_rain = 0.0
-
-            # 좌클릭으로 탄환 발사(기존 그대로)
+            # 좌클릭 탄환
             if event.button == 1:
                 mx, my = pygame.mouse.get_pos()
                 projectiles.append(Projectile(player_spawn.x, player_spawn.y, mx, my))
+            # 가운데 클릭 수류탄
+            if event.button == 2:
+                mx, my = pygame.mouse.get_pos()
+                dx = mx - player_spawn.x
+                dy = my - player_spawn.y
+                dist = math.sqrt(dx*dx+dy*dy)
+                if dist == 0: dist=1
+                speed = 8
+                vx = (dx/dist)*speed
+                vy = (dy/dist)*speed
+                grenades.append(Grenade(player_spawn.x, player_spawn.y, vx, vy, fuse=3.0))
 
     player_spawn.handle_input(keys)
 
-    # 비 파티클 생성 로직
+    # 비 파티클 생성
     if rain_enabled:
-        # 비가 내리는 동안 time_since_rain=0으로 초기화
         time_since_rain = 0.0
-        # 매 프레임 약간의 확률로 여러 방울 생성
-        # 예: 매 프레임 3~5개 정도 생성
         for i in range(random.randint(3,5)):
             x_pos = random.uniform(0, WIDTH)
-            # 약간의 초기 속도와 크기 변화를 줌
-            vy_init = random.uniform(5,8) # 빠르게 떨어지는 빗방울
+            vy_init = random.uniform(5,8)
             size = random.randint(2,4)
             particles.append(Particle(x_pos, 0, 0, vy_init, size=size))
 
@@ -310,16 +399,11 @@ while running:
     # 파티클 업데이트
     for pa in particles:
         pa.update()
-    # 파티클 바닥 처리:
-    # 바닥에 닿으면 파티클 소멸, water_level += 약간 증가
-    # 버스 충돌 시 소멸(증발)
     survived_particles = []
     for pa in particles:
         if pa.hit_floor():
-            # 바닥 도달 -> 물 축적
             water_level += 0.1
         elif pa.is_dead() or bus.inside_aabb(pa.x, pa.y):
-            # 수명 만료 or 버스 충돌시 제거
             pass
         else:
             survived_particles.append(pa)
@@ -351,11 +435,38 @@ while running:
         for pa in particles:
             pa.vx += force_x*0.1
             pa.vy += force_y*0.1
+        for f in fragments:
+            f.vx += force_x*0.05
+            f.vy += force_y*0.05
 
-    # 물 증발 로직
-    # 비가 안온 지 RAIN_DECAY_TIME초 지나면 증발 시작
+    # 물 증발
     if not rain_enabled and time_since_rain > RAIN_DECAY_TIME:
         water_level = max(0, water_level - EVAPORATION_RATE)
+
+    # 수류탄 업데이트
+    for g in grenades:
+        g.update(dt, bus)
+
+    # 폭발한 수류탄 처리
+    exploded_grenades = [g for g in grenades if g.is_exploded()]
+    new_frags = []
+    for g in exploded_grenades:
+        gx, gy = g.get_position()
+        new_frags += spawn_fragments(gx, gy)
+    fragments += new_frags
+    grenades = [g for g in grenades if not g.is_exploded()]
+
+    # 파편 업데이트 & 버스 충돌
+    survived_frags = []
+    for f in fragments:
+        f.update()
+        if not f.is_dead():
+            if f.check_bus_collision(bus):
+                # 버스와 충돌 -> 파편 소멸
+                pass
+            else:
+                survived_frags.append(f)
+    fragments = survived_frags
 
     # 렌더링
     screen.fill((30, 30, 30))
@@ -366,22 +477,25 @@ while running:
     for pa in particles:
         pa.draw(screen)
 
-    # 바닥 및 물 웅덩이 시각화
+    # 물 웅덩이
     pygame.draw.line(screen, (100,50,0), (0, floor_y), (WIDTH, floor_y), 5)
-
     if water_level > 0:
-        # water_level이 클수록 더 높은 물 레이어 표현 가능
-        # 여기서는 단순히 floor_y 부근에 얇은 파란 레이어
-        # water_level이 커질수록 height 증가 혹은 투명도 변경
-        water_height = min(20, water_level*0.5) # 최대 20픽셀 높이
+        water_height = min(20, water_level*0.5)
         surf = pygame.Surface((WIDTH, water_height), pygame.SRCALPHA)
-        alpha = min(200, int(20+water_level*5)) # 물 많을수록 불투명
+        alpha = min(200, int(20+water_level*5))
         surf.fill((0,0,255, alpha))
         screen.blit(surf, (0, floor_y - water_height))
 
+    # 수류탄, 파편 그리기
+    for g in grenades:
+        g.draw(screen)
+    for f in fragments:
+        f.draw(screen)
+
     direction_text = direction_names[wind_direction_index]
     info_text = FONT.render(
-        "[Arrows/WASD]Move | L-Click:Straight Bullet | R-Click:Toggle Rain | W:WindToggle | 1~8:Dir={} | 9/0:WindStr={} | R:Reset | water_level={:.2f}".format(direction_text, wind_strength, water_level),
+        "[Arrows/WASD]Move | L:Bullet | R:RainToggle | M:Grenade(Mid Click) | W:WindToggle | 1~8:Dir={} | 9/0:WStr={} | R:Reset | water={:.2f}".format(
+            direction_text, wind_strength, water_level),
         True, (255,255,255))
     screen.blit(info_text, (10, 10))
 
